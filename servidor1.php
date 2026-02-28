@@ -11,6 +11,7 @@ echo "Servidor TCP iniciado en puerto $puerto\n";
 
 $clientes = [$socket_maestro];
 $estado_clientes = []; // Para recordar en qué opción del menú está cada cliente
+$datos_temporales = []; // NUEVO: Para guardar N y la Matriz A temporalmente en el paso 2
 
 $menu_principal = "\n--- MENÚ DEL SERVIDOR TCP ---\n" .
                   "1. Ordenar arreglo de 10 números\n" .
@@ -31,7 +32,9 @@ while (true) {
         if ($socket_actual == $socket_maestro) {
             $nuevo_cliente = socket_accept($socket_maestro);
             $clientes[] = $nuevo_cliente;
-            $id = (int)$nuevo_cliente;
+            
+            // SOLUCIÓN 1: Usar spl_object_id en lugar de (int)
+            $id = spl_object_id($nuevo_cliente); 
             
             $estado_clientes[$id] = 'MENU'; // Estado inicial
             
@@ -42,18 +45,19 @@ while (true) {
         // DATOS DE UN CLIENTE EXISTENTE
         else {
             $datos = @socket_read($socket_actual, 2048, PHP_NORMAL_READ);
-            $id = (int)$socket_actual;
+            $id = spl_object_id($socket_actual); // SOLUCIÓN 1
 
             if ($datos === false || trim($datos) == '') {
                 // Desconexión
                 unset($clientes[array_search($socket_actual, $clientes)]);
                 unset($estado_clientes[$id]);
+                unset($datos_temporales[$id]);
                 socket_close($socket_actual);
                 continue;
             }
 
             $input = trim($datos);
-            $estado = $estado_clientes[$id];
+            $estado = $estado_clientes[$id] ?? 'MENU';
 
             // MÁQUINA DE ESTADOS
             if ($estado == 'MENU') {
@@ -77,6 +81,7 @@ while (true) {
                         socket_write($socket_actual, "Desconectando...\n", 17);
                         unset($clientes[array_search($socket_actual, $clientes)]);
                         unset($estado_clientes[$id]);
+                        unset($datos_temporales[$id]);
                         socket_close($socket_actual);
                         break;
                     default:
@@ -94,30 +99,95 @@ while (true) {
                 $estado_clientes[$id] = 'MENU';
                 $resultado .= $menu_principal;
                 socket_write($socket_actual, $resultado, strlen($resultado));
-            }
+            } 
+            
+            // --- INICIO SOLUCIÓN 2: LÓGICA DE MATRICES POR ESTADOS ---
             elseif ($estado == 'ESPERANDO_N_MATRIZ') {
                 $n = (int)$input;
-                if ($n > 0 && $n <= 10) { // Limitado a 10 para no saturar la consola
-                    $resultado = "Multiplicando dos matrices aleatorias de $n x $n...\n[Operación Simulada Exitosa]\n";
-                    // Nota: Aquí puedes expandir la lógica real de multiplicación si tu docente lo exige a detalle
+                if ($n > 0 && $n <= 10) { 
+                    $datos_temporales[$id]['n'] = $n;
+                    $estado_clientes[$id] = 'ESPERANDO_MATRIZ_A';
+                    $msg = "Ingresa los " . ($n*$n) . " valores de la MATRIZ A separados por comas: \n";
+                    socket_write($socket_actual, $msg, strlen($msg));
                 } else {
-                    $resultado = "Valor de N inválido.\n";
+                    $resultado = "Valor de N inválido.\n" . $menu_principal;
+                    $estado_clientes[$id] = 'MENU';
+                    socket_write($socket_actual, $resultado, strlen($resultado));
                 }
-                $estado_clientes[$id] = 'MENU';
-                $resultado .= $menu_principal;
-                socket_write($socket_actual, $resultado, strlen($resultado));
             }
+            elseif ($estado == 'ESPERANDO_MATRIZ_A') {
+                $n = $datos_temporales[$id]['n'];
+                $valores = explode(',', $input);
+                if (count($valores) == ($n*$n)) {
+                    $datos_temporales[$id]['matrizA'] = $valores;
+                    $estado_clientes[$id] = 'ESPERANDO_MATRIZ_B';
+                    $msg = "Ingresa los " . ($n*$n) . " valores de la MATRIZ B separados por comas: \n";
+                    socket_write($socket_actual, $msg, strlen($msg));
+                } else {
+                    $msg = "Error: Ingresaste " . count($valores) . " valores, se esperaban " . ($n*$n) . ".\nIngresa de nuevo la MATRIZ A: \n";
+                    socket_write($socket_actual, $msg, strlen($msg));
+                }
+            }
+            elseif ($estado == 'ESPERANDO_MATRIZ_B') {
+                $n = $datos_temporales[$id]['n'];
+                $valoresB = explode(',', $input);
+                
+                if (count($valoresB) == ($n*$n)) {
+                    $valoresA = $datos_temporales[$id]['matrizA'];
+                    
+                    // Convertir a matrices 2D
+                    $A = []; $B = []; $C = [];
+                    for ($i = 0; $i < $n; $i++) {
+                        for ($j = 0; $j < $n; $j++) {
+                            $A[$i][$j] = (int)$valoresA[$i * $n + $j];
+                            $B[$i][$j] = (int)$valoresB[$i * $n + $j];
+                        }
+                    }
+
+                    // Multiplicar
+                    for ($i = 0; $i < $n; $i++) {
+                        for ($j = 0; $j < $n; $j++) {
+                            $C[$i][$j] = 0;
+                            for ($k = 0; $k < $n; $k++) {
+                                $C[$i][$j] += $A[$i][$k] * $B[$k][$j];
+                            }
+                        }
+                    }
+
+                    $resultado = "\n--- Resultado de la Multiplicación ---\n";
+                    for ($i = 0; $i < $n; $i++) {
+                        $resultado .= implode("\t", $C[$i]) . "\n";
+                    }
+                    
+                    $estado_clientes[$id] = 'MENU';
+                    unset($datos_temporales[$id]); // Limpiar memoria
+                    $resultado .= $menu_principal;
+                    socket_write($socket_actual, $resultado, strlen($resultado));
+                    
+                } else {
+                    $msg = "Error: Ingresaste " . count($valoresB) . " valores, se esperaban " . ($n*$n) . ".\nIngresa de nuevo la MATRIZ B: \n";
+                    socket_write($socket_actual, $msg, strlen($msg));
+                }
+            }
+            // --- FIN LÓGICA DE MATRICES ---
+
             elseif ($estado == 'CHAT') {
                 if (strtolower($input) == 'salir') {
                     $estado_clientes[$id] = 'MENU';
                     socket_write($socket_actual, "Saliendo del chat...\n" . $menu_principal, strlen($menu_principal) + 22);
                 } else {
-                    // Hacer Broadcast (enviar a todos menos al maestro y al que envía)
                     socket_getpeername($socket_actual, $ip_remitente);
+                    
+                    // SOLUCIÓN 3: Imprimir en la consola del servidor para que tú lo veas
+                    echo "CHAT -> [$ip_remitente dice]: $input\n";
+
+                    // Hacer Broadcast a los demás
                     $msg_chat = "[$ip_remitente dice]: $input\n";
                     foreach ($clientes as $cliente_destino) {
                         if ($cliente_destino != $socket_maestro && $cliente_destino != $socket_actual) {
-                            $estado_destino = $estado_clientes[(int)$cliente_destino];
+                            $id_destino = spl_object_id($cliente_destino); // SOLUCIÓN 1
+                            $estado_destino = $estado_clientes[$id_destino] ?? '';
+                            
                             // Solo enviar a los que también estén en el chat
                             if ($estado_destino == 'CHAT') {
                                 @socket_write($cliente_destino, $msg_chat, strlen($msg_chat));
