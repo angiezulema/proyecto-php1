@@ -1,5 +1,5 @@
 <?php
-// Configuración de red (0.0.0.0 escucha en cualquier IP que tenga el servidor, DHCP o Estática)
+// Configuración de red
 $host = '0.0.0.0';
 $puerto = 5000;
 
@@ -10,85 +10,64 @@ socket_bind($socket_maestro, $host, $puerto);
 socket_listen($socket_maestro);
 
 echo "Servidor TCP iniciado en $host:$puerto\n";
-echo "Esperando clientes (Windows, Linux Mint, Ubuntu)...\n";
+echo "Esperando clientes...\n";
 
 // Arreglo para rastrear todos los clientes conectados
 $clientes = [$socket_maestro];
 
 while (true) {
-    // socket_select modifica el arreglo, así que usamos una copia
     $lectura = $clientes;
     $escritura = null;
     $excepcion = null;
 
-    // Esperar a que haya actividad en alguno de los sockets
-    socket_select($lectura, $escritura, $excepcion, null);
+    // socket_select permite manejar múltiples conexiones sin bloquearse
+    if (socket_select($lectura, $escritura, $excepcion, null) < 1) continue;
 
     foreach ($lectura as $socket_actual) {
-        // 1. Si hay actividad en el socket maestro, es una NUEVA conexión
+        // 1. NUEVA CONEXIÓN
         if ($socket_actual == $socket_maestro) {
             $nuevo_cliente = socket_accept($socket_maestro);
             $clientes[] = $nuevo_cliente;
-            
+
             socket_getpeername($nuevo_cliente, $ip_cliente);
             echo "Nuevo cliente conectado desde: $ip_cliente\n";
 
-            // Enviar el menú inicial al cliente
-            $menu = "\n--- MENÚ DEL SERVIDOR TCP ---\n" .
-                    "1. Ordenar arreglo de 10 números\n" .
-                    "2. Multiplicación de matrices NxN\n" .
-                    "3. Entrar al Chat\n" .
-                    "4. Salir\n" .
-                    "Elige una opción: ";
+            $menu = "\n--- BIENVENIDO AL CHAT TCP ---\n" .
+                    "Escribe algo para chatear o '4' para salir.\n" .
+                    "Tu IP es: $ip_cliente\n\n";
             socket_write($nuevo_cliente, $menu, strlen($menu));
         } 
-        // 2. Si la actividad es en otro socket, es un cliente enviando DATOS
+        // 2. CLIENTE ENVIANDO DATOS
         else {
-            $datos = @socket_read($socket_actual, 1024, PHP_NORMAL_READ);
-
-            // Si el cliente se desconecta
-            if ($datos === false || trim($datos) == '') {
-                $indice = array_search($socket_actual, $clientes);
-                unset($clientes[$indice]);
+            $bytes = @socket_recv($socket_actual, $buffer, 2048, 0);
+            
+            if ($bytes == 0) { // Cliente desconectado
+                socket_getpeername($socket_actual, $ip_cliente);
+                echo "Cliente desconectado: $ip_cliente\n";
+                $key = array_search($socket_actual, $clientes);
+                unset($clientes[$key]);
                 socket_close($socket_actual);
-                echo "Un cliente se ha desconectado.\n";
-                continue;
-            }
+            } else {
+                $mensaje = trim($buffer);
+                socket_getpeername($socket_actual, $ip_remitente);
 
-            $opcion = trim($datos);
-            $respuesta = "";
-
-            // Procesar la opción del menú
-            switch ($opcion) {
-                case '1':
-                    $respuesta = "Has elegido Ordenar Arreglo. Envía 10 números separados por coma:\n";
-                    // Aquí irá la lógica de ordenamiento
-                    break;
-                case '2':
-                    $respuesta = "Has elegido Multiplicación de Matrices. Envía el valor de N:\n";
-                    // Aquí irá la lógica de matrices
-                    break;
-                case '3':
-                    $respuesta = "Has entrado al chat. Escribe un mensaje (o 'salir_chat' para volver al menú):\n";
-                    // Aquí irá la lógica de broadcast a otros clientes
-                    break;
-                case '4':
-                    $respuesta = "Desconectando... ¡Adiós!\n";
-                    socket_write($socket_actual, $respuesta, strlen($respuesta));
-                    $indice = array_search($socket_actual, $clientes);
-                    unset($clientes[$indice]);
+                if ($mensaje == '4') {
                     socket_close($socket_actual);
-                    continue 2; // Salta a la siguiente iteración del foreach
-                default:
-                    $respuesta = "Opción no válida. Intenta de nuevo.\nElige una opción (1-4): ";
-                    break;
-            }
+                    $key = array_search($socket_actual, $clientes);
+                    unset($clientes[$key]);
+                } elseif ($mensaje != '') {
+                    // Formato del mensaje con hora e IP
+                    $formato = "[" . date('H:i') . "] $ip_remitente dice: " . $mensaje . "\n";
+                    echo "Broadcast: " . $formato;
 
-            // Enviar la respuesta de vuelta al cliente
-            socket_write($socket_actual, $respuesta, strlen($respuesta));
+                    // DIFUSIÓN: Enviar a todos excepto al que envió y al maestro
+                    foreach ($clientes as $cliente_destino) {
+                        if ($cliente_destino !== $socket_maestro && $cliente_destino !== $socket_actual) {
+                            socket_write($cliente_destino, $formato, strlen($formato));
+                        }
+                    }
+                }
+            }
         }
     }
 }
-
-socket_close($socket_maestro);
-?>
