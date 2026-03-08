@@ -1,93 +1,197 @@
 <?php
 
-
 $host = '0.0.0.0';
-
-
 $puerto = 5000;
 
-
 $socket_maestro = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-
-// Permite reutilizar el puerto
 socket_set_option($socket_maestro, SOL_SOCKET, SO_REUSEADDR, 1);
-
-// Asociar socket al host y puerto
 socket_bind($socket_maestro, $host, $puerto);
-
-
 socket_listen($socket_maestro);
 
-echo "Servidor TCP iniciado en $host:$puerto\n";
-echo "Esperando clientes...\n";
+echo "Servidor TCP iniciado en puerto $puerto\n";
 
-// clientes conectados
 $clientes = [$socket_maestro];
+$estado_clientes = [];
 
-while (true) {
+$menu = "\n--- MENU DEL SERVIDOR ---\n".
+        "1. Ordenar arreglo de 10 numeros\n".
+        "2. Multiplicar matrices NxN\n".
+        "3. Chat\n".
+        "4. Salir\n".
+        "Seleccione opcion: ";
 
-    // actividad en clientes
+while(true){
+
     $lectura = $clientes;
     $escritura = null;
     $excepcion = null;
 
-    if (socket_select($lectura, $escritura, $excepcion, null) < 1) continue;
+    socket_select($lectura,$escritura,$excepcion,null);
 
-    foreach ($lectura as $socket_actual) {
+    foreach($lectura as $socket_actual){
 
-        // nueva conexion
-        if ($socket_actual == $socket_maestro) {
+        // NUEVO CLIENTE
+        if($socket_actual == $socket_maestro){
 
             $nuevo_cliente = socket_accept($socket_maestro);
             $clientes[] = $nuevo_cliente;
 
-            socket_getpeername($nuevo_cliente, $ip_cliente);
-            echo "Nuevo cliente conectado desde: $ip_cliente\n";
+            $id = (int)$nuevo_cliente;
+            $estado_clientes[$id] = 'MENU';
 
-            $menu = "\n--- BIENVENIDO AL CHAT TCP ---\n" .
-                    "Escribe algo para chatear o '4' para salir.\n";
+            socket_write($nuevo_cliente,$menu,strlen($menu));
+        }
 
-            socket_write($nuevo_cliente, $menu, strlen($menu));
-        } 
-        
-        // mensaje de un cliente
-        else {
+        // CLIENTE EXISTENTE
+        else{
 
-            $bytes = @socket_recv($socket_actual, $buffer, 2048, 0);
-            
-            // cliente desconectado
-            if ($bytes == 0) {
+            $datos = @socket_read($socket_actual,2048,PHP_NORMAL_READ);
+            $id = (int)$socket_actual;
 
-                socket_getpeername($socket_actual, $ip_cliente);
-                echo "Cliente desconectado: $ip_cliente\n";
+            if($datos === false){
 
-                $key = array_search($socket_actual, $clientes);
-                unset($clientes[$key]);
-
+                unset($clientes[array_search($socket_actual,$clientes)]);
+                unset($estado_clientes[$id]);
                 socket_close($socket_actual);
+                continue;
+            }
 
-            } else {
+            $input = trim($datos);
+            $estado = $estado_clientes[$id];
 
-                $mensaje = trim($buffer);
-                socket_getpeername($socket_actual, $ip_remitente);
+            // MENU
+            if($estado == 'MENU'){
 
-                if ($mensaje == '4') {
+                switch($input){
 
-                    socket_close($socket_actual);
-                    $key = array_search($socket_actual, $clientes);
-                    unset($clientes[$key]);
+                    case '1':
 
-                } 
-                
-                // Enviar mensaje a todos los clientes
-                elseif ($mensaje != '') {
+                        $estado_clientes[$id] = 'ORDENAR';
+                        $msg = "Ingrese 10 numeros separados por coma:\n";
+                        socket_write($socket_actual,$msg,strlen($msg));
+                        break;
 
-                    $formato = "[" . date('H:i') . "] $ip_remitente: " . $mensaje . "\n";
+                    case '2':
 
-                    foreach ($clientes as $cliente_destino) {
+                        $estado_clientes[$id] = 'MATRIZ';
+                        $msg = "Ingrese el valor de N:\n";
+                        socket_write($socket_actual,$msg,strlen($msg));
+                        break;
 
-                        if ($cliente_destino !== $socket_maestro && $cliente_destino !== $socket_actual) {
-                            socket_write($cliente_destino, $formato, strlen($formato));
+                    case '3':
+
+                        $estado_clientes[$id] = 'CHAT';
+                        $msg = "Entraste al chat. Escribe 'salir' para volver al menu\n";
+                        socket_write($socket_actual,$msg,strlen($msg));
+                        break;
+
+                    case '4':
+
+                        socket_write($socket_actual,"Desconectando...\n",17);
+                        unset($clientes[array_search($socket_actual,$clientes)]);
+                        unset($estado_clientes[$id]);
+                        socket_close($socket_actual);
+                        break;
+
+                    default:
+
+                        socket_write($socket_actual,"Opcion invalida\n".$menu,strlen($menu)+14);
+                }
+            }
+
+            // ORDENAR NUMEROS
+            elseif($estado == 'ORDENAR'){
+
+                $nums = explode(',',$input);
+
+                if(count($nums)==10){
+
+                    sort($nums);
+                    $resultado = "Arreglo ordenado: ".implode(', ',$nums)."\n";
+                }
+                else{
+
+                    $resultado = "Error: deben ser 10 numeros\n";
+                }
+
+                $estado_clientes[$id] = 'MENU';
+                $resultado .= $menu;
+
+                socket_write($socket_actual,$resultado,strlen($resultado));
+            }
+
+            // MATRICES
+            elseif($estado == 'MATRIZ'){
+
+                $n = (int)$input;
+
+                if($n>0 && $n<=5){
+
+                    $A=[];
+                    $B=[];
+                    $C=[];
+
+                    for($i=0;$i<$n;$i++){
+                        for($j=0;$j<$n;$j++){
+
+                            $A[$i][$j]=rand(1,9);
+                            $B[$i][$j]=rand(1,9);
+                            $C[$i][$j]=0;
+                        }
+                    }
+
+                    for($i=0;$i<$n;$i++){
+                        for($j=0;$j<$n;$j++){
+                            for($k=0;$k<$n;$k++){
+
+                                $C[$i][$j]+=$A[$i][$k]*$B[$k][$j];
+                            }
+                        }
+                    }
+
+                    $resultado="Resultado matriz:\n";
+
+                    for($i=0;$i<$n;$i++){
+
+                        $resultado.=implode(' ',$C[$i])."\n";
+                    }
+
+                }
+                else{
+
+                    $resultado="N invalido\n";
+                }
+
+                $estado_clientes[$id]='MENU';
+                $resultado.=$menu;
+
+                socket_write($socket_actual,$resultado,strlen($resultado));
+            }
+
+            // CHAT
+            elseif($estado == 'CHAT'){
+
+                if(strtolower($input)=='salir'){
+
+                    $estado_clientes[$id]='MENU';
+                    socket_write($socket_actual,$menu,strlen($menu));
+                }
+
+                else{
+
+                    socket_getpeername($socket_actual,$ip);
+                    $msg="[$ip]: $input\n";
+
+                    foreach($clientes as $cliente){
+
+                        if($cliente!=$socket_maestro && $cliente!=$socket_actual){
+
+                            $estado_destino=$estado_clientes[(int)$cliente];
+
+                            if($estado_destino=='CHAT'){
+
+                                socket_write($cliente,$msg,strlen($msg));
+                            }
                         }
                     }
                 }
